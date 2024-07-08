@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 
 interface ChunkData {
   start: number;
@@ -175,6 +175,21 @@ const App: React.FC = () => {
     }
   };
 
+  const handlePlayChunk = (start: number, end: number) => {
+    if (audioSrc) {
+      const audio = new Audio(audioSrc);
+      audio.currentTime = start;
+      const handleTimeUpdate = () => {
+        if (audio.currentTime >= end) {
+          audio.pause();
+          audio.removeEventListener('timeupdate', handleTimeUpdate);
+        }
+      };
+      audio.addEventListener('timeupdate', handleTimeUpdate);
+      audio.play();
+    }
+  };
+
   return (
       <div className="min-h-screen bg-gray-100 flex flex-col items-center justify-center p-4">
         <header className="w-full max-w-md bg-white rounded-lg shadow-md p-6 text-center">
@@ -212,6 +227,7 @@ const App: React.FC = () => {
                           <tr>
                             <th className="border p-2 text-left">Text</th>
                             <th className="border p-2 text-left">Predictions</th>
+                            <th className="border p-2 text-left">Actions</th>
                           </tr>
                           </thead>
                           <tbody>
@@ -219,16 +235,23 @@ const App: React.FC = () => {
                               <tr key={index}>
                                 <td className="border p-2">
                             <textarea
+                                readOnly
                                 className="w-full p-2 border border-gray-300 rounded fitcnt"
                                 value={chunk.text}
                             />
                                 </td>
                                 <td className="border p-2">
-                                  {}
                                   {Object.entries(chunk.prediction)
-                                      .map(([accent, prob]) => {
-                                        return <p>{`${accent}: ${(prob * 100).toFixed(2)}%`}</p>;
-                                      })}
+                                      .map(([accent, prob]) => `${accent}: ${(prob * 100).toFixed(2)}%`)
+                                      .join(', ')}
+                                </td>
+                                <td className="border p-2">
+                                  <button
+                                      onClick={() => handlePlayChunk(chunk.start, chunk.end)}
+                                      className="bg-blue-500 text-white py-1 px-2 rounded"
+                                  >
+                                    Play
+                                  </button>
                                 </td>
                               </tr>
                           ))}
