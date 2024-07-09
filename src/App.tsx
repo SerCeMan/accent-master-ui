@@ -1,4 +1,6 @@
-import React, { useState, useRef, useEffect } from 'react';
+import { makeAutoObservable, runInAction } from "mobx";
+import React, { ChangeEvent } from 'react';
+import { observer } from 'mobx-react-lite';
 
 interface ChunkData {
   start: number;
@@ -7,60 +9,71 @@ interface ChunkData {
   prediction: { [key: string]: number };
 }
 
-const App: React.FC = () => {
-  const [imageSrc, setImageSrc] = useState<string | null>(null);
-  const [audioSrc, setAudioSrc] = useState<string | null>(null);
-  const [isRecording, setIsRecording] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [transcriptionData, setTranscriptionData] = useState<ChunkData[]>([]);
-  const [synthesizedAudioSrc, setSynthesizedAudioSrc] = useState<string | null>(null);
-  const [selectedAccent, setSelectedAccent] = useState<string>('british');
-  const rawTextRef = useRef<string>('');
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioStreamRef = useRef<MediaStream | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
+class AppStore {
+  imageSrc: string | null = null;
+  audioSrc: string | null = null;
+  isRecording = false;
+  isLoading = false;
+  errorMessage: string | null = null;
+  transcriptionData: ChunkData[] = [];
+  synthesizedAudioSrc: string | null = null;
+  selectedAccent = 'british';
+  rawText = '';
+  mediaRecorder: MediaRecorder | null = null;
+  audioStream: MediaStream | null = null;
+  audioChunks: Blob[] = [];
+  chunkBeingRecorded: number | null = null;
 
-  const handleStartStopRecording = async () => {
-    if (isRecording) {
-      handleStopRecording();
+  constructor() {
+    makeAutoObservable(this);
+  }
+
+  async handleStartStopRecording() {
+    if (this.isRecording) {
+      this.handleStopRecording();
     } else {
-      await handleStartRecording();
+      await this.handleStartRecording();
     }
-  };
+  }
 
-  const handleStartRecording = async () => {
+  async handleStartRecording() {
     try {
-      setIsRecording(true);
-      setImageSrc(null);
-      setErrorMessage(null);
-      setTranscriptionData([]);
+      this.setIsRecording(true);
+      this.setImageSrc(null);
+      this.setErrorMessage(null);
+      this.setTranscriptionData([]);
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      audioStreamRef.current = stream;
+      runInAction(() => {
+        this.audioStream = stream;
+      });
       const mediaRecorder = new MediaRecorder(stream);
 
-      audioChunksRef.current = [];
+      runInAction(() => {
+        this.audioChunks = [];
+      });
 
       mediaRecorder.ondataavailable = (event) => {
         if (event.data.size > 0) {
-          audioChunksRef.current.push(event.data);
+          runInAction(() => {
+            this.audioChunks.push(event.data);
+          });
         }
       };
 
       mediaRecorder.onstop = async () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/wav' });
+        const audioBlob = new Blob(this.audioChunks, { type: 'audio/wav' });
         if (audioBlob.size === 0) {
           console.error('Recorded audio blob is empty.');
           return;
         }
 
         const audioURL = URL.createObjectURL(audioBlob);
-        setAudioSrc(audioURL);
+        this.setAudioSrc(audioURL);
 
         const formData = new FormData();
         formData.append('file', audioBlob, 'audio.wav');
 
-        setIsLoading(true);
+        this.setIsLoading(true);
         try {
           const response = await fetch('http://localhost:5000/predict', {
             method: 'POST',
@@ -72,49 +85,52 @@ const App: React.FC = () => {
           }
 
           const data = await response.json();
-          setImageSrc(`data:image/png;base64,${data.image_base64}`);
-          setTranscriptionData(data.chunks);
-          rawTextRef.current = data.chunks.map((chunk: ChunkData) => chunk.text).join(' '); // Store raw text
+          runInAction(() => {
+            this.setImageSrc(`data:image/png;base64,${data.image_base64}`);
+            this.setTranscriptionData(data.chunks);
+            this.rawText = data.chunks.map((chunk: ChunkData) => chunk.text).join(' '); // Store raw text
+          });
         } catch (error) {
           console.error('Error uploading audio:', error);
-          setErrorMessage('Error uploading audio');
+          this.setErrorMessage('Error uploading audio');
         } finally {
-          setIsLoading(false);
-          if (audioStreamRef.current) {
-            audioStreamRef.current.getTracks().forEach(track => track.stop());
-            audioStreamRef.current = null;
+          this.setIsLoading(false);
+          if (this.audioStream) {
+            this.audioStream.getTracks().forEach(track => track.stop());
+            this.audioStream = null;
           }
         }
       };
 
-      mediaRecorderRef.current = mediaRecorder;
+      runInAction(() => {
+        this.mediaRecorder = mediaRecorder;
+      });
       mediaRecorder.start();
     } catch (error) {
       console.error('Error starting recording:', error);
-      setIsRecording(false);
+      this.setIsRecording(false);
     }
-  };
+  }
 
-  const handleStopRecording = () => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
+  handleStopRecording() {
+    if (this.mediaRecorder && this.isRecording) {
+      this.mediaRecorder.stop();
+      this.setIsRecording(false);
     }
-  };
+  }
 
-  const handleFileUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
+  async handleFileUpload(file: File) {
     if (file) {
-      setImageSrc(null);
-      setErrorMessage(null);
-      setTranscriptionData([]);
+      this.setImageSrc(null);
+      this.setErrorMessage(null);
+      this.setTranscriptionData([]);
       const audioURL = URL.createObjectURL(file);
-      setAudioSrc(audioURL);
+      this.setAudioSrc(audioURL);
 
       const formData = new FormData();
       formData.append('file', file);
 
-      setIsLoading(true);
+      this.setIsLoading(true);
       try {
         const response = await fetch('http://localhost:5000/predict', {
           method: 'POST',
@@ -126,30 +142,32 @@ const App: React.FC = () => {
         }
 
         const data = await response.json();
-        setImageSrc(`data:image/png;base64,${data.image_base64}`);
-        setTranscriptionData(data.chunks);
-        rawTextRef.current = data.chunks.map((chunk: ChunkData) => chunk.text).join(' ');
+        runInAction(() => {
+          this.setImageSrc(`data:image/png;base64,${data.image_base64}`);
+          this.setTranscriptionData(data.chunks);
+          this.rawText = data.chunks.map((chunk: ChunkData) => chunk.text).join(' ');
+        });
       } catch (error) {
         console.error('Error uploading file:', error);
-        setErrorMessage('Error uploading file');
+        this.setErrorMessage('Error uploading file');
       } finally {
-        setIsLoading(false);
+        this.setIsLoading(false);
       }
     }
-  };
+  }
 
-  const handleSynthesize = async () => {
-    const text = rawTextRef.current;
-    const accent = selectedAccent;
+  async handleSynthesize() {
+    const text = this.rawText;
+    const accent = this.selectedAccent;
 
     if (!text || !accent) {
-      setErrorMessage('Text or accent is missing.');
+      this.setErrorMessage('Text or accent is missing.');
       return;
     }
 
-    setIsLoading(true);
-    setErrorMessage(null);
-    setSynthesizedAudioSrc(null);
+    this.setIsLoading(true);
+    this.setErrorMessage(null);
+    this.setSynthesizedAudioSrc(null);
 
     try {
       const response = await fetch('http://localhost:5001/synthesize', {
@@ -166,18 +184,18 @@ const App: React.FC = () => {
 
       const audioBlob = await response.blob();
       const audioURL = URL.createObjectURL(audioBlob);
-      setSynthesizedAudioSrc(audioURL);
+      this.setSynthesizedAudioSrc(audioURL);
     } catch (error) {
       console.error('Error synthesizing audio:', error);
-      setErrorMessage('Error synthesizing audio');
+      this.setErrorMessage('Error synthesizing audio');
     } finally {
-      setIsLoading(false);
+      this.setIsLoading(false);
     }
-  };
+  }
 
-  const handlePlayChunk = (start: number, end: number) => {
-    if (audioSrc) {
-      const audio = new Audio(audioSrc);
+  handlePlayChunk(start: number, end: number) {
+    if (this.audioSrc) {
+      const audio = new Audio(this.audioSrc);
       audio.currentTime = start;
       const handleTimeUpdate = () => {
         if (audio.currentTime >= end) {
@@ -188,6 +206,125 @@ const App: React.FC = () => {
       audio.addEventListener('timeupdate', handleTimeUpdate);
       audio.play();
     }
+  }
+
+  async handleStartChunkRecording(index: number) {
+    if (this.isRecording) {
+      return;
+    }
+
+    try {
+      this.chunkBeingRecorded = index;
+      this.setIsRecording(true);
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      runInAction(() => {
+        this.audioStream = stream;
+      });
+      const mediaRecorder = new MediaRecorder(stream);
+
+      runInAction(() => {
+        this.audioChunks = [];
+      });
+
+      mediaRecorder.ondataavailable = (event) => {
+        if (event.data.size > 0) {
+          runInAction(() => {
+            this.audioChunks.push(event.data);
+          });
+        }
+      };
+
+      mediaRecorder.onstop = async () => {
+        const audioBlob = new Blob(this.audioChunks, { type: 'audio/wav' });
+        if (audioBlob.size === 0) {
+          console.error('Recorded audio blob is empty.');
+          return;
+        }
+
+        const formData = new FormData();
+        formData.append('file', audioBlob, 'audio.wav');
+
+        this.setIsLoading(true);
+        try {
+          const response = await fetch('http://localhost:5000/predict', {
+            method: 'POST',
+            body: formData,
+          });
+
+          if (!response.ok) {
+            throw new Error('Network response was not ok');
+          }
+
+          const data = await response.json();
+          runInAction(() => {
+            const prevData = this.transcriptionData
+            const replacedIndex = index;
+            const newData = [...prevData];
+            newData[replacedIndex] = data.chunks[0];
+            this.setTranscriptionData(newData);
+          });
+        } catch (error) {
+          console.error('Error uploading audio:', error);
+          this.setErrorMessage('Error uploading audio');
+        } finally {
+          this.setIsLoading(false);
+          if (this.audioStream) {
+            this.audioStream.getTracks().forEach((track) => track.stop());
+            this.audioStream = null;
+          }
+          this.chunkBeingRecorded = null;
+          this.setIsRecording(false);
+        }
+      };
+
+      runInAction(() => {
+        this.mediaRecorder = mediaRecorder;
+      });
+      mediaRecorder.start();
+    } catch (error) {
+      console.error('Error starting chunk recording:', error);
+      this.setIsRecording(false);
+    }
+  }
+
+  // Utility setters to ensure state changes are tracked by MobX
+  setIsRecording(value: boolean) {
+    this.isRecording = value;
+  }
+
+  setIsLoading(value: boolean) {
+    this.isLoading = value;
+  }
+
+  setImageSrc(value: string | null) {
+    this.imageSrc = value;
+  }
+
+  setAudioSrc(value: string | null) {
+    this.audioSrc = value;
+  }
+
+  setErrorMessage(value: string | null) {
+    this.errorMessage = value;
+  }
+
+  setTranscriptionData(value: ChunkData[]) {
+    this.transcriptionData = value;
+  }
+
+  setSynthesizedAudioSrc(value: string | null) {
+    this.synthesizedAudioSrc = value;
+  }
+}
+
+const appStore = new AppStore();
+
+const App: React.FC = observer(() => {
+  const handleFileUpload = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (file) {
+      appStore.handleFileUpload(file);
+    }
   };
 
   return (
@@ -197,10 +334,10 @@ const App: React.FC = () => {
           <div className="flex flex-col space-y-4">
             <div className="flex space-x-4">
               <button
-                  onClick={handleStartStopRecording}
+                  onClick={() => appStore.handleStartStopRecording()}
                   className="bg-blue-500 text-white py-2 px-4 rounded disabled:opacity-50"
               >
-                {isRecording ? 'Stop Recording' : 'Start Recording'}
+                {appStore.isRecording ? 'Stop Recording' : 'Start Recording'}
               </button>
               <input
                   type="file"
@@ -209,18 +346,18 @@ const App: React.FC = () => {
                   className="file:mr-4 file:py-2 file:px-4 file:rounded file:border-0 file:text-sm file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
               />
             </div>
-            {audioSrc && (
-                <audio controls src={audioSrc} className="w-full mt-4">
+            {appStore.audioSrc && (
+                <audio controls src={appStore.audioSrc} className="w-full mt-4">
                   Your browser does not support the audio element.
                 </audio>
             )}
-            {isLoading ? (
+            {appStore.isLoading ? (
                 <p className="text-blue-500">Loading...</p>
             ) : (
                 <>
-                  {imageSrc && <img src={imageSrc} alt="Accent Result" className="mt-4 w-full object-contain" />}
-                  {errorMessage && <p className="text-red-500">{errorMessage}</p>}
-                  {transcriptionData.length > 0 && (
+                  {appStore.imageSrc && <img src={appStore.imageSrc} alt="Accent Result" className="mt-4 w-full object-contain" />}
+                  {appStore.errorMessage && <p className="text-red-500">{appStore.errorMessage}</p>}
+                  {appStore.transcriptionData.length > 0 && (
                       <div className="w-full mt-4">
                         <table className="w-full border-collapse">
                           <thead>
@@ -231,12 +368,12 @@ const App: React.FC = () => {
                           </tr>
                           </thead>
                           <tbody>
-                          {transcriptionData.map((chunk, index) => (
+                          {appStore.transcriptionData.map((chunk, index) => (
                               <tr key={index}>
                                 <td className="border p-2">
                             <textarea
                                 readOnly
-                                className="w-full p-2 border border-gray-300 rounded fitcnt"
+                                className="w-full p-2 border border-gray-300 rounded"
                                 value={chunk.text}
                             />
                                 </td>
@@ -245,12 +382,19 @@ const App: React.FC = () => {
                                       .map(([accent, prob]) => `${accent}: ${(prob * 100).toFixed(2)}%`)
                                       .join(', ')}
                                 </td>
-                                <td className="border p-2">
+                                <td className="border p-2 flex space-x-2">
                                   <button
-                                      onClick={() => handlePlayChunk(chunk.start, chunk.end)}
+                                      onClick={() => appStore.handlePlayChunk(chunk.start, chunk.end)}
                                       className="bg-blue-500 text-white py-1 px-2 rounded"
                                   >
                                     Play
+                                  </button>
+                                  <button
+                                      onClick={() => appStore.handleStartChunkRecording(index)}
+                                      className="bg-red-500 text-white py-1 px-2 rounded"
+                                      disabled={appStore.isRecording}
+                                  >
+                                    Re-record
                                   </button>
                                 </td>
                               </tr>
@@ -261,22 +405,22 @@ const App: React.FC = () => {
                   )}
                   <div className="flex items-center space-x-4 mt-4">
                     <select
-                        value={selectedAccent}
-                        onChange={(e) => setSelectedAccent(e.target.value)}
+                        value={appStore.selectedAccent}
+                        onChange={(e) => appStore.selectedAccent = e.target.value}
                         className="border border-gray-300 rounded p-2"
                     >
                       <option value="british">British</option>
                       <option value="us">US</option>
                     </select>
                     <button
-                        onClick={handleSynthesize}
+                        onClick={() => appStore.handleSynthesize()}
                         className="bg-green-500 text-white py-2 px-4 rounded"
                     >
                       Synthesize
                     </button>
                   </div>
-                  {synthesizedAudioSrc && (
-                      <audio controls src={synthesizedAudioSrc} className="w-full mt-4">
+                  {appStore.synthesizedAudioSrc && (
+                      <audio controls src={appStore.synthesizedAudioSrc} className="w-full mt-4">
                         Your browser does not support the audio element.
                       </audio>
                   )}
@@ -286,6 +430,6 @@ const App: React.FC = () => {
         </header>
       </div>
   );
-};
+});
 
 export default App;
